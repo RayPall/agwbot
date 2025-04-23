@@ -224,7 +224,7 @@ else:
             "Ahoj Martine,\n\n"
             "dal bys prosím dohromady statistiky za iDoklad a připravil mailing.\n\n"
             "Články bych tam dala tyto (v pořadí ENGAGEMENT, CONVERSION, EDUCATIONAL, SEASONAL):\n" +
-            "\n".join(links) + "\n\nS pozdravem\nAnička"
+            "\n".join(links) + "\n\nS pozdravem\nA"
         )
 
         key = f"{sel_year}-{sel_month:02d}"
