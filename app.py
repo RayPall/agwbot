@@ -1,20 +1,21 @@
 """
 Streamlit aplikace pro výběr článků z blogu iDoklad (přes RSS feed) a vygenerování
-textu e‑mailu.
+textu e-mailu.
 
-### Co se změnilo
-* Namísto scrapování HTML se nyní používá **RSS feed** poskytnutý uživatelem:
-  https://rss.app/feeds/2IEcDYoo7hF8d27H.xml → zaručená detekce všech článků.
-* Ostatní funkce zůstávají: výběr měsíce, kontrola již použitých článků,
-  generování předmětu a těla e‑mailu.
+### Novinky v této verzi
+* **Tlačítko „🗑️ Vymazat historii výběru“** – smaže soubor `sent_posts.json`, takže
+  se články považují za „nepoužité“ a můžou být vybrány znovu.
+* **Tlačítko „🔄 Aktualizovat články“** – ručně znovu načte RSS feed a přepočítá
+  dostupné měsíce/články (užitečné, když právě vyšel nový příspěvek).
+* Ostatní funkce zůstávají: výběr měsíce, kontrola historie, generování e-mailu.
 
-> **Tip k nasazení:** Přidej do `requirements.txt` také `feedparser` ( `feedparser>=6` ).
+> **Dependency:** `feedparser>=6` (nezapomeň v `requirements.txt`).
 """
 
 from __future__ import annotations
 
-import json
 import email.utils as eut
+import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple
@@ -31,7 +32,7 @@ HISTORY_FILE = Path("sent_posts.json")  # uchovává URL už použitých článk
 MAX_ARTICLES = 4
 RECIPIENT_EMAIL = "anna.gwiltova@seyfor.com"
 
-# České názvy měsíců – indexy 1‑12
+# České názvy měsíců – indexy 1-12
 CZECH_MONTHS = [
     "",  # dummy, aby leden měl index 1
     "leden", "únor", "březen", "duben", "květen", "červen",
@@ -63,12 +64,16 @@ def save_history(data: dict) -> None:
     HISTORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def clear_history() -> None:
+    if HISTORY_FILE.exists():
+        HISTORY_FILE.unlink()
+
+
 def fetch_blog_articles() -> List[Tuple[str, str, date]]:
     """Načte články z RSS feedu → (title, url, publish_date)."""
-    # U feedparser není nutné requests; použijeme interní fetch s fallbackem
     feed = feedparser.parse(RSS_FEED_URL)
     if feed.bozo:
-        # Pokud parsování selže, zkusíme přes requests (proxy/firewall) a feedparser.parse(obj)
+        # fallback přes requests (proxy/firewall)
         resp = requests.get(RSS_FEED_URL, timeout=10)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
@@ -87,7 +92,6 @@ def fetch_blog_articles() -> List[Tuple[str, str, date]]:
         except (TypeError, ValueError):
             continue
         articles.append((title, url, dt.date()))
-
     return articles
 
 
@@ -114,10 +118,24 @@ def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, st
 #  Streamlit UI
 ############################################################
 
-st.set_page_config(page_title="iDoklad Blog – generátor e‑mailu (RSS)", page_icon="✉️")
-st.title("✉️ iDoklad Blog – generátor e‑mailu (RSS)")
+st.set_page_config(page_title="iDoklad Blog – generátor e-mailu (RSS)", page_icon="✉️")
 
-# Načtení článků přes RSS
+#  ░░ SIDEBAR – Nastavení ░░
+with st.sidebar:
+    st.header("⚙️ Nastavení")
+    if st.button("🗑️ Vymazat historii výběru"):
+        clear_history()
+        st.success("Historie byla smazána.")
+        st.experimental_rerun()
+
+#  ░░ HLAVNÍ STRÁNKA ░░
+st.title("✉️ iDoklad Blog – generátor e-mailu (RSS)")
+
+# Aktualizační tlačítko (nahoře, aby bylo po ruce)
+if st.button("🔄 Aktualizovat články"):
+    st.experimental_rerun()
+
+# ►► Načtení článků
 with st.spinner("Načítám RSS feed …"):
     try:
         all_articles = fetch_blog_articles()
@@ -127,7 +145,7 @@ with st.spinner("Načítám RSS feed …"):
 
 history = load_history()
 
-# ▼▼  Sestavení seznamu měsíců, které mají nové (nevyužité) články  ▼▼
+# ►► Sestavení seznamu měsíců s dostupnými články
 
 def months_back(limit: int = 60) -> list[tuple[int, int]]:
     ref = date.today().replace(day=15)
@@ -158,23 +176,25 @@ selected_ym = st.selectbox(
 sel_year, sel_month = selected_ym
 selected_articles = article_cache[(sel_year, sel_month)]
 
-# ▼▼  Výpis vybraných článků  ▼▼
+# ►► Výpis vybraných článků
+title_links = [[title, url, pub_date] for title, url, pub_date in selected_articles]
+
 st.subheader("Vybrané články")
-for title, url, pub_date in selected_articles:
+for title, url, pub_date in title_links:
     st.markdown(f"- [{title}]({url}) – {pub_date:%d.%m.%Y}")
 
-# ▼▼  Generování e‑mailu  ▼▼
-if st.button("Vygenerovat e‑mail", type="primary"):
-    links = [url for _title, url, _ in selected_articles]
+# ►► Generování e-mailu
+if st.button("✉️ Vygenerovat e-mail", type="primary"):
+    links = [url for _title, url, _ in title_links]
     subject, body = compose_email_body(links, sel_year, sel_month)
 
-    # zapsat do historie → simulace odeslání
+    # zapsat do historie (simulace odeslání)
     hist_key = f"{sel_year}-{sel_month:02d}"
     history.setdefault(hist_key, []).extend(links)
     save_history(history)
 
-    st.success("E‑mail byl vygenerován!")
+    st.success("E-mail byl vygenerován!")
     st.markdown("### Předmět")
     st.code(subject, language="text")
-    st.markdown("### Text e‑mailu")
+    st.markdown("### Text e-mailu")
     st.text_area("", body, height=300)
