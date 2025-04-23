@@ -1,3 +1,4 @@
 streamlit>=1.35
 requests
 beautifulsoup4
+feedparser>=6
