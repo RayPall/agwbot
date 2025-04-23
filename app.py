@@ -1,31 +1,32 @@
 """
-Streamlit aplikace pro výběr článků z blogu iDoklad a vygenerování textu e‑mailu.
+Streamlit aplikace pro výběr článků z blogu iDoklad (přes RSS feed) a vygenerování
+textu e‑mailu.
 
-Novinky v této verzi
---------------------
-* **Dropdown zobrazuje jen měsíce, pro které existují zatím‑nevyužité články.**
-  ‑ Uživatel tak nikdy nenarazí na prázdnou hlášku „nejsou k dispozici žádné články“.
-* Logika výběru článků, generování e‑mailu a sledování historie zůstává stejná.
+### Co se změnilo
+* Namísto scrapování HTML se nyní používá **RSS feed** poskytnutý uživatelem:
+  https://rss.app/feeds/2IEcDYoo7hF8d27H.xml → zaručená detekce všech článků.
+* Ostatní funkce zůstávají: výběr měsíce, kontrola již použitých článků,
+  generování předmětu a těla e‑mailu.
 
-⚠️  Aplikace stále e‑mail pouze připraví, nikoliv odešle.
+> **Tip k nasazení:** Přidej do `requirements.txt` také `feedparser` ( `feedparser>=6` ).
 """
 
 from __future__ import annotations
 
 import json
-import re
+import email.utils as eut
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple
 
+import feedparser  # RSS parser
 import requests
 import streamlit as st
-from bs4 import BeautifulSoup
 
 ############################################################
 #  Konfigurace
 ############################################################
-BLOG_URL = "https://www.idoklad.cz/blog"
+RSS_FEED_URL = "https://rss.app/feeds/2IEcDYoo7hF8d27H.xml"
 HISTORY_FILE = Path("sent_posts.json")  # uchovává URL už použitých článků
 MAX_ARTICLES = 4
 RECIPIENT_EMAIL = "anna.gwiltova@seyfor.com"
@@ -42,7 +43,6 @@ CZECH_MONTHS = [
 ############################################################
 
 def previous_month(ref: date | None = None) -> tuple[int, int]:
-    """Vrátí (rok, měsíc) předchozího měsíce vzhledem k *ref* (nebo dnešku)."""
     if ref is None:
         ref = date.today()
     first_this_month = ref.replace(day=1)
@@ -64,37 +64,36 @@ def save_history(data: dict) -> None:
 
 
 def fetch_blog_articles() -> List[Tuple[str, str, date]]:
-    """Načte články z BLOG_URL → (title, url, publish_date)."""
-    resp = requests.get(BLOG_URL, timeout=10)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    """Načte články z RSS feedu → (title, url, publish_date)."""
+    # U feedparser není nutné requests; použijeme interní fetch s fallbackem
+    feed = feedparser.parse(RSS_FEED_URL)
+    if feed.bozo:
+        # Pokud parsování selže, zkusíme přes requests (proxy/firewall) a feedparser.parse(obj)
+        resp = requests.get(RSS_FEED_URL, timeout=10)
+        resp.raise_for_status()
+        feed = feedparser.parse(resp.content)
 
-    out: list[tuple[str, str, date]] = []
-    for art in soup.find_all("article"):
-        a_tag = art.find("a", href=True)
-        if not a_tag:
+    articles: list[tuple[str, str, date]] = []
+    for entry in feed.entries:
+        title = entry.get("title", "Neznámý titulek")
+        url = entry.get("link")
+        if not url:
             continue
-        url = a_tag["href"]
-        title = a_tag.get_text(strip=True)
-
-        time_tag = art.find("time", {"datetime": re.compile(r"^\\d{4}-\\d{2}-\\d{2}$")})
-        if not time_tag:
+        published_raw = entry.get("published") or entry.get("pubDate") or entry.get("updated")
+        if not published_raw:
             continue
-        pub_date = datetime.fromisoformat(time_tag["datetime"]).date()
-        out.append((title, url, pub_date))
-    return out
+        try:
+            dt = eut.parsedate_to_datetime(published_raw)
+        except (TypeError, ValueError):
+            continue
+        articles.append((title, url, dt.date()))
+
+    return articles
 
 
-def select_articles(
-    articles: list[tuple[str, str, date]],
-    history: dict,
-    year: int,
-    month: int,
-) -> list[tuple[str, str, date]]:
-    """Vrátí max. 4 dosud nevybrané články pro daný rok/měsíc."""
+def select_articles(articles: list[tuple[str, str, date]], history: dict, year: int, month: int) -> list[tuple[str, str, date]]:
     key = f"{year}-{month:02d}"
     used = set(history.get(key, []))
-
     candidates = [a for a in articles if a[2].year == year and a[2].month == month and a[1] not in used]
     candidates.sort(key=lambda x: x[2], reverse=True)
     return candidates[:MAX_ARTICLES]
@@ -115,15 +114,15 @@ def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, st
 #  Streamlit UI
 ############################################################
 
-st.set_page_config(page_title="iDoklad Blog – generátor e‑mailu", page_icon="✉️")
-st.title("✉️ iDoklad Blog – generátor e‑mailu")
+st.set_page_config(page_title="iDoklad Blog – generátor e‑mailu (RSS)", page_icon="✉️")
+st.title("✉️ iDoklad Blog – generátor e‑mailu (RSS)")
 
-# Načtení článků z blogu
-with st.spinner("Načítám články …"):
+# Načtení článků přes RSS
+with st.spinner("Načítám RSS feed …"):
     try:
         all_articles = fetch_blog_articles()
     except Exception as exc:
-        st.error(f"Chyba při načítání blogu: {exc}")
+        st.error(f"Chyba při načítání RSS feedu: {exc}")
         st.stop()
 
 history = load_history()
@@ -138,7 +137,6 @@ def months_back(limit: int = 60) -> list[tuple[int, int]]:
         ref = (ref.replace(day=1) - timedelta(days=1)).replace(day=15)
     return months
 
-# Pro každý měsíc ověř, zda existuje alespoň jeden ještě‑nevyužitý článek
 valid_months: list[tuple[int, int]] = []
 article_cache: dict[tuple[int, int], list[tuple[str, str, date]]] = {}
 for y, m in months_back(60):
@@ -148,17 +146,14 @@ for y, m in months_back(60):
         valid_months.append((y, m))
 
 if not valid_months:
-    st.info("Nenalezeny žádné články, které by dosud nebyly použity. 💤")
+    st.info("Nenalezeny žádné nové (dosud neodeslané) články. 💤")
     st.stop()
-
-# Výchozí hodnota – první (nejaktuálnější) platný měsíc
-init_index = 0
 
 selected_ym = st.selectbox(
     "Zvol měsíc, ze kterého vybrat články:",
     options=valid_months,
     format_func=lambda ym: f"{CZECH_MONTHS[ym[1]].capitalize()} {ym[0]}",
-    index=init_index,
+    index=0,
 )
 sel_year, sel_month = selected_ym
 selected_articles = article_cache[(sel_year, sel_month)]
