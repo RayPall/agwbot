@@ -1,13 +1,13 @@
 """
 Streamlit aplikace pro výběr článků z blogu iDoklad (přes RSS feed) a vygenerování
-textu e-mailu.
+textu e‑mailu.
 
 ### Novinky v této verzi
-* **Tlačítko „🗑️ Vymazat historii výběru“** – smaže soubor `sent_posts.json`, takže
-  se články považují za „nepoužité“ a můžou být vybrány znovu.
-* **Tlačítko „🔄 Aktualizovat články“** – ručně znovu načte RSS feed a přepočítá
-  dostupné měsíce/články (užitečné, když právě vyšel nový příspěvek).
-* Ostatní funkce zůstávají: výběr měsíce, kontrola historie, generování e-mailu.
+* **Oprava chyby `AttributeError: st.experimental_rerun`.**
+  + Přidán univerzální helper `rerun()` → funguje na starších i nových verzích
+    Streamlitu (`st.rerun()` ⇆ `st.experimental_rerun()`).
+* Funkce „Vymazat historii“ a „Aktualizovat články“ tak opět spolehlivě reloadují
+  aplikaci.
 
 > **Dependency:** `feedparser>=6` (nezapomeň v `requirements.txt`).
 """
@@ -32,7 +32,7 @@ HISTORY_FILE = Path("sent_posts.json")  # uchovává URL už použitých článk
 MAX_ARTICLES = 4
 RECIPIENT_EMAIL = "anna.gwiltova@seyfor.com"
 
-# České názvy měsíců – indexy 1-12
+# České názvy měsíců – indexy 1‑12
 CZECH_MONTHS = [
     "",  # dummy, aby leden měl index 1
     "leden", "únor", "březen", "duben", "květen", "červen",
@@ -43,12 +43,14 @@ CZECH_MONTHS = [
 #  Pomocné funkce
 ############################################################
 
-def previous_month(ref: date | None = None) -> tuple[int, int]:
-    if ref is None:
-        ref = date.today()
-    first_this_month = ref.replace(day=1)
-    last_prev = first_this_month - timedelta(days=1)
-    return last_prev.year, last_prev.month
+def rerun() -> None:
+    """Bezpečný reload aplikace napříč verzemi Streamlitu."""
+    if hasattr(st, "rerun"):
+        st.rerun()
+    elif hasattr(st, "experimental_rerun"):
+        st.experimental_rerun()
+    else:
+        st.warning("Aktuální verze Streamlitu nepodporuje 'rerun'.")
 
 
 def load_history() -> dict:
@@ -118,22 +120,22 @@ def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, st
 #  Streamlit UI
 ############################################################
 
-st.set_page_config(page_title="iDoklad Blog – generátor e-mailu (RSS)", page_icon="✉️")
+st.set_page_config(page_title="iDoklad Blog – generátor e‑mailu (RSS)", page_icon="✉️")
 
 #  ░░ SIDEBAR – Nastavení ░░
 with st.sidebar:
     st.header("⚙️ Nastavení")
-    if st.button("🗑️ Vymazat historii výběru"):
+    if st.button("🗑️ Vymazat historii výběru"):
         clear_history()
         st.success("Historie byla smazána.")
-        st.experimental_rerun()
+        rerun()
 
 #  ░░ HLAVNÍ STRÁNKA ░░
-st.title("✉️ iDoklad Blog – generátor e-mailu (RSS)")
+st.title("✉️ iDoklad Blog – generátor e‑mailu (RSS)")
 
 # Aktualizační tlačítko (nahoře, aby bylo po ruce)
-if st.button("🔄 Aktualizovat články"):
-    st.experimental_rerun()
+if st.button("🔄 Aktualizovat články"):
+    rerun()
 
 # ►► Načtení článků
 with st.spinner("Načítám RSS feed …"):
@@ -177,15 +179,13 @@ sel_year, sel_month = selected_ym
 selected_articles = article_cache[(sel_year, sel_month)]
 
 # ►► Výpis vybraných článků
-title_links = [[title, url, pub_date] for title, url, pub_date in selected_articles]
-
 st.subheader("Vybrané články")
-for title, url, pub_date in title_links:
+for title, url, pub_date in selected_articles:
     st.markdown(f"- [{title}]({url}) – {pub_date:%d.%m.%Y}")
 
-# ►► Generování e-mailu
-if st.button("✉️ Vygenerovat e-mail", type="primary"):
-    links = [url for _title, url, _ in title_links]
+# ►► Generování e‑mailu
+if st.button("✉️ Vygenerovat e‑mail", type="primary"):
+    links = [url for _title, url, _ in selected_articles]
     subject, body = compose_email_body(links, sel_year, sel_month)
 
     # zapsat do historie (simulace odeslání)
@@ -193,8 +193,8 @@ if st.button("✉️ Vygenerovat e-mail", type="primary"):
     history.setdefault(hist_key, []).extend(links)
     save_history(history)
 
-    st.success("E-mail byl vygenerován!")
+    st.success("E‑mail byl vygenerován!")
     st.markdown("### Předmět")
     st.code(subject, language="text")
-    st.markdown("### Text e-mailu")
+    st.markdown("### Text e‑mailu")
     st.text_area("", body, height=300)
