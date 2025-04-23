@@ -1,10 +1,13 @@
 """
 Streamlit aplikace pro výběr článků z blogu iDoklad a vygenerování textu e‑mailu.
 
-✔️ Uživatel si nyní může vybrat libovolný měsíc / rok (posledních 5 let). 
-✔️ Aplikace vybere max. 4 články zvoleného období, které ještě nebyly použity, 
-   a zobrazí předmět i tělo e‑mailu.
-✔️ Žádný e‑mail se neodesílá, SMTP není potřeba.
+Novinky v této verzi
+--------------------
+* **Dropdown zobrazuje jen měsíce, pro které existují zatím‑nevyužité články.**
+  ‑ Uživatel tak nikdy nenarazí na prázdnou hlášku „nejsou k dispozici žádné články“.
+* Logika výběru článků, generování e‑mailu a sledování historie zůstává stejná.
+
+⚠️  Aplikace stále e‑mail pouze připraví, nikoliv odešle.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ from bs4 import BeautifulSoup
 #  Konfigurace
 ############################################################
 BLOG_URL = "https://www.idoklad.cz/blog"
-HISTORY_FILE = Path("sent_posts.json")  # lokální soubor s již využitými články
+HISTORY_FILE = Path("sent_posts.json")  # uchovává URL už použitých článků
 MAX_ARTICLES = 4
 RECIPIENT_EMAIL = "anna.gwiltova@seyfor.com"
 
@@ -61,12 +64,12 @@ def save_history(data: dict) -> None:
 
 
 def fetch_blog_articles() -> List[Tuple[str, str, date]]:
-    """Načte všechny články z BLOG_URL → (title, url, publish_date)."""
+    """Načte články z BLOG_URL → (title, url, publish_date)."""
     resp = requests.get(BLOG_URL, timeout=10)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    articles: list[tuple[str, str, date]] = []
+    out: list[tuple[str, str, date]] = []
     for art in soup.find_all("article"):
         a_tag = art.find("a", href=True)
         if not a_tag:
@@ -78,8 +81,8 @@ def fetch_blog_articles() -> List[Tuple[str, str, date]]:
         if not time_tag:
             continue
         pub_date = datetime.fromisoformat(time_tag["datetime"]).date()
-        articles.append((title, url, pub_date))
-    return articles
+        out.append((title, url, pub_date))
+    return out
 
 
 def select_articles(
@@ -90,15 +93,14 @@ def select_articles(
 ) -> list[tuple[str, str, date]]:
     """Vrátí max. 4 dosud nevybrané články pro daný rok/měsíc."""
     key = f"{year}-{month:02d}"
-    already = set(history.get(key, []))
+    used = set(history.get(key, []))
 
-    filtered = [a for a in articles if a[2].year == year and a[2].month == month and a[1] not in already]
-    filtered.sort(key=lambda x: x[2], reverse=True)
-    return filtered[:MAX_ARTICLES]
+    candidates = [a for a in articles if a[2].year == year and a[2].month == month and a[1] not in used]
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    return candidates[:MAX_ARTICLES]
 
 
 def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, str]:
-    """Sestaví (subject, body) e‑mailu podle zadaného roku/měsíce."""
     month_name = CZECH_MONTHS[month]
     subject = f"iDoklad blog – tipy na články za {month_name.capitalize()} {year}"
     body = (
@@ -116,63 +118,64 @@ def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, st
 st.set_page_config(page_title="iDoklad Blog – generátor e‑mailu", page_icon="✉️")
 st.title("✉️ iDoklad Blog – generátor e‑mailu")
 
-# Načtení článků
+# Načtení článků z blogu
 with st.spinner("Načítám články …"):
     try:
         all_articles = fetch_blog_articles()
-    except Exception as e:
-        st.error(f"Chyba při načítání blogu: {e}")
+    except Exception as exc:
+        st.error(f"Chyba při načítání blogu: {exc}")
         st.stop()
 
 history = load_history()
 
-# ▼▼  Volba roku a měsíce  ▼▼
+# ▼▼  Sestavení seznamu měsíců, které mají nové (nevyužité) články  ▼▼
 
-def last_n_months(n: int = 12) -> list[tuple[int, int]]:
-    ref = date.today().replace(day=15)  # fix middle to avoid DST issues
-    res: list[tuple[int, int]] = []
-    for _ in range(n):
-        res.append((ref.year, ref.month))
+def months_back(limit: int = 60) -> list[tuple[int, int]]:
+    ref = date.today().replace(day=15)
+    months: list[tuple[int, int]] = []
+    for _ in range(limit):
+        months.append((ref.year, ref.month))
         ref = (ref.replace(day=1) - timedelta(days=1)).replace(day=15)
-    return res
+    return months
 
-months_options = last_n_months(60)  # posledních 5 let (~60 měsíců)
+# Pro každý měsíc ověř, zda existuje alespoň jeden ještě‑nevyužitý článek
+valid_months: list[tuple[int, int]] = []
+article_cache: dict[tuple[int, int], list[tuple[str, str, date]]] = {}
+for y, m in months_back(60):
+    key = (y, m)
+    article_cache[key] = select_articles(all_articles, history, y, m)
+    if article_cache[key]:
+        valid_months.append((y, m))
 
-# Výchozí – předchozí měsíc
-init_year, init_month = previous_month()
+if not valid_months:
+    st.info("Nenalezeny žádné články, které by dosud nebyly použity. 💤")
+    st.stop()
 
-def fmt(y_m: tuple[int, int]) -> str:
-    y, m = y_m
-    return f"{CZECH_MONTHS[m].capitalize()} {y}"
+# Výchozí hodnota – první (nejaktuálnější) platný měsíc
+init_index = 0
 
 selected_ym = st.selectbox(
     "Zvol měsíc, ze kterého vybrat články:",
-    options=months_options,
-    format_func=fmt,
-    index=months_options.index((init_year, init_month)),
+    options=valid_months,
+    format_func=lambda ym: f"{CZECH_MONTHS[ym[1]].capitalize()} {ym[0]}",
+    index=init_index,
 )
 sel_year, sel_month = selected_ym
+selected_articles = article_cache[(sel_year, sel_month)]
 
-# ▼▼  Výběr článků  ▼▼
-selected_articles = select_articles(all_articles, history, sel_year, sel_month)
-
-if not selected_articles:
-    st.warning("Pro zvolený měsíc nejsou k dispozici žádné nové (dosud neodeslané) články.")
-    st.stop()
-
+# ▼▼  Výpis vybraných článků  ▼▼
 st.subheader("Vybrané články")
-links: list[str] = []
 for title, url, pub_date in selected_articles:
     st.markdown(f"- [{title}]({url}) – {pub_date:%d.%m.%Y}")
-    links.append(url)
 
 # ▼▼  Generování e‑mailu  ▼▼
 if st.button("Vygenerovat e‑mail", type="primary"):
+    links = [url for _title, url, _ in selected_articles]
     subject, body = compose_email_body(links, sel_year, sel_month)
 
-    # uložit do historie (simulace odeslání)
-    key = f"{sel_year}-{sel_month:02d}"
-    history.setdefault(key, []).extend(links)
+    # zapsat do historie → simulace odeslání
+    hist_key = f"{sel_year}-{sel_month:02d}"
+    history.setdefault(hist_key, []).extend(links)
     save_history(history)
 
     st.success("E‑mail byl vygenerován!")
