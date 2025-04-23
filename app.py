@@ -3,12 +3,13 @@ Streamlit aplikace pro výběr článků z blogu iDoklad (přes RSS feed) a vyge
 textu e‑mailu.
 
 ### Novinky v této verzi
-* **Výběr až 3 posledních měsíců** – rozbalovací pole teď nabízí 
-  aktuální měsíc **+ dvě předchozí** bez ohledu na to, jestli už byly články použity.  
-  (Pokud pro daný měsíc nejsou k dispozici nové články, zobrazí se po výběru varování.)
-* Helper `rerun()` zůstává pro kompatibilní refresh.
+* **Zobrazení historie** – v postranním panelu najdeš rozbalovací sekci
+  „Historie vybraných článků“, která ukazuje, kdy a jaké odkazy už byly použity
+  (podle uloženého souboru `sent_posts.json`).
+* Stále můžeš historii smazat tlačítkem 🗑️, nebo aplikaci reloadovat 🔄.
+* Výběr až 3 posledních měsíců zůstává.
 
-> `requirements.txt` stále musí obsahovat `feedparser>=6`.
+> `requirements.txt`: `feedparser>=6`
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ import email.utils as eut
 import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 
 import feedparser  # RSS parser
 import requests
@@ -51,7 +52,7 @@ def rerun() -> None:
         st.experimental_rerun()
 
 
-def load_history() -> dict:
+def load_history() -> Dict[str, List[str]]:
     if HISTORY_FILE.exists():
         try:
             return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
@@ -73,7 +74,6 @@ def fetch_blog_articles() -> List[Tuple[str, str, date]]:
     """Načte články z RSS feedu → (title, url, publish_date)."""
     feed = feedparser.parse(RSS_FEED_URL)
     if feed.bozo:
-        # fallback přes requests
         resp = requests.get(RSS_FEED_URL, timeout=10)
         resp.raise_for_status()
         feed = feedparser.parse(resp.content)
@@ -110,7 +110,7 @@ def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, st
         "Ahoj Martine,\n\n"
         f"dal bys prosím dohromady statistiky za iDoklad za {month_name} {year}. Databáze kontaktů by měla být aktuální.\n\n"
         "Články bych tam dala tyto:\n" + "\n".join(links) + "\n\n"
-        "S pozdravem\nAnička"
+        "S pozdravem\nA"
     )
     return subject, body
 
@@ -120,6 +120,8 @@ def compose_email_body(links: list[str], year: int, month: int) -> tuple[str, st
 
 st.set_page_config(page_title="iDoklad Blog – generátor e‑mailu (RSS)", page_icon="✉️")
 
+history = load_history()
+
 # ░░ SIDEBAR ░░
 with st.sidebar:
     st.header("⚙️ Nastavení")
@@ -127,6 +129,20 @@ with st.sidebar:
         clear_history()
         st.success("Historie byla smazána.")
         rerun()
+
+    # ►► Zobrazení historie
+    with st.expander("📜 Historie vybraných článků", expanded=False):
+        if not history:
+            st.write("(prázdná)")
+        else:
+            # Seřadit klíče (YYYY‑MM) od nejnovějšího
+            for key in sorted(history.keys(), reverse=True):
+                year, month = map(int, key.split("-"))
+                month_name = CZECH_MONTHS[month].capitalize()
+                st.markdown(f"#### {month_name} {year}")
+                for link in history[key]:
+                    st.markdown(f"- <{link}>")
+                st.markdown("---")
 
 # ░░ HLAVNÍ STRÁNKA ░░
 st.title("✉️ iDoklad Blog – generátor e‑mailu (RSS)")
@@ -141,8 +157,6 @@ with st.spinner("Načítám RSS feed …"):
     except Exception as exc:
         st.error(f"Chyba při načítání RSS: {exc}")
         st.stop()
-
-history = load_history()
 
 # ►► Seznam posledních N měsíců
 
