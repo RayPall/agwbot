@@ -223,7 +223,7 @@ else:
         body = (
             "Ahoj Martine,\n\n"
             "dal bys prosím dohromady statistiky za iDoklad a připravil mailing.\n\n"
-            "Články bych tam dala tyto (v pořadí ENGAGEMENT, CONVERSION, EDUCATIONAL, SEASONAL):\n" +
+            "Články bych tam dala tyto:\n" +
             "\n".join(links) + "\n\nS pozdravem\nA"
         )
 
