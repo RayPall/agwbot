@@ -1,19 +1,19 @@
 """
 Streamlit aplikace pro výběr článků z blogu iDoklad (přes RSS feed) a vygenerování
-textu e-mailu — **nyní strategicky skládá mix 4 článků** dle zadání marketingu:
+textu e‑mailu — **nyní strategicky skládá mix 4 článků** dle zadání marketingu:
 
 | Kategorie | Cíl |
 |-----------|-----|
-| **ENGAGEMENT** | Atraktivní téma s potenciálem vysoké návštěvnosti |
+| **ENGAGEMENT** | Atraktivní téma s potenciálem vysoké návštěvnosti |
 | **CONVERSION** | Článek, který pravděpodobně navede ke koupi / upgradu |
-| **EDUCATIONAL** | Edukace, budování důvěry a know-how |
+| **EDUCATIONAL** | Edukace, budování důvěry a know‑how |
 | **SEASONAL** | Reaguje na aktuální období (daně, začátky roku, atd.) |
 
-Aplikace se snaží vybrat **1 článek z každé kategorie**. Pokud pro některou není
+Aplikace se snaží vybrat **1 článek z každé kategorie**. Pokud pro některou není
 k dispozici vhodný kandidát, doplní se jiným dostupným (podle data).
 
-> ⚠️ Klasifikace je založená na jednoduchých klíčových slovech v titulku a
-> popisu RSS položky. Pokud se netrefí, klíčová slova lze kdykoli rozšířit v diktu
+> ⚠️ Klasifikace je založená na jednoduchých klíčových slovech v titulku a
+> popisu RSS položky. Pokud se netrefí, klíčová slova lze kdykoli rozšířit v diktu
 > `CATEGORY_KEYWORDS`.
 
 `requirements.txt`:
@@ -43,7 +43,7 @@ HISTORY_FILE = Path("sent_posts.json")  # uchovává URL již použitých člán
 MAX_ARTICLES = 4
 MONTHS_TO_SHOW = 3   # aktuální měsíc + 2 předchozí
 
-# České názvy měsíců – indexy 1-12
+# České názvy měsíců – indexy 1‑12
 CZECH_MONTHS = [
     "",  # dummy index
     "leden", "únor", "březen", "duben", "květen", "červen",
@@ -73,14 +73,14 @@ def rerun() -> None:
 def load_history() -> Dict[str, List[str]]:
     if HISTORY_FILE.exists():
         try:
-            return json.loads(HISTORY_FILE.read_text("utf-8"))
+            return json.loads(HISTORY_FILE.read_text("utf‑8"))
         except json.JSONDecodeError:
             pass
     return {}
 
 
 def save_history(data: dict) -> None:
-    HISTORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+    HISTORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf‑8")
 
 
 def clear_history() -> None:
@@ -184,7 +184,7 @@ with st.sidebar:
                 st.markdown("---")
 
 # ░░ HLAVNÍ ░░
-st.title("✉️ iDoklad Blog – strategický výběr 4 článků")
+st.title("✉️ iDoklad Blog – strategický výběr 4 článků")
 if st.button("🔄 Aktualizovat články"):
     rerun()
 
@@ -199,7 +199,7 @@ with st.spinner("Načítám RSS feed …"):
 months = [(date.today().replace(day=15) - timedelta(days=30 * i)).replace(day=15) for i in range(MONTHS_TO_SHOW)]
 months_opts = [(dt.year, dt.month) for dt in months]
 sel_year, sel_month = st.selectbox(
-    "Vyber měsíc (aktuální + 2 předchozí):",
+    "Vyber měsíc (aktuální + 2 předchozí):",
     options=months_opts,
     format_func=lambda ym: f"{CZECH_MONTHS[ym[1]].capitalize()} {ym[0]}",
     index=0,
@@ -217,13 +217,13 @@ else:
         cat = classify_article(title, "") or "OTHER"
         st.markdown(f"- **[{title}]({url})**   *({cat.lower()}, {pub_d.strftime('%d.%m.%Y')})*")
 
-    if st.button("✉️ Vygenerovat e-mail", type="primary"):
+    if st.button("✉️ Vygenerovat e‑mail", type="primary"):
         links = [url for _, url, _, _ in selected_articles]
         subject = f"iDoklad blog – strategický mix článků ({CZECH_MONTHS[sel_month]} {sel_year})"
         body = (
             "Ahoj Martine,\n\n"
             "dal bys prosím dohromady statistiky za iDoklad a připravil mailing.\n\n"
-            "Články bych tam dala tyto:\n" +
+            "Články bych tam dala tyto (v pořadí ENGAGEMENT, CONVERSION, EDUCATIONAL, SEASONAL):\n" +
             "\n".join(links) + "\n\nS pozdravem\nA"
         )
 
@@ -231,6 +231,6 @@ else:
         history.setdefault(key, []).extend(links)
         save_history(history)
 
-        st.success("E-mail byl vygenerován!")
+        st.success("E‑mail byl vygenerován!")
         st.code(subject)
-        st.text_area("Text e-mailu", body, height=300)
+        st.text_area("Text e‑mailu", body, height=300)
