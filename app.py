@@ -98,12 +98,19 @@ def parse_date(raw: str | None):
 
 
 def fetch_blog_articles() -> List[Tuple[str, str, date, str]]:
-    """Vrátí list (title, url, publish_date, summary)."""
-    feed = feedparser.parse(RSS_FEED_URL)
-    if feed.bozo:
-        resp = requests.get(RSS_FEED_URL, timeout=10)
+    """Načte RSS vždy čerstvě (obchází interní cache feedparseru).
+
+    Vrátí list (title, url, publish_date, summary).
+    """
+    # Vždy stáhneme XML ručně – tím se vyhneme 304/etag cache bugu,
+    # kvůli kterému po rychlém opětovném dotazu feedparser vrací prázdné `entries`.
+    try:
+        resp = requests.get(RSS_FEED_URL, timeout=10, headers={"Cache-Control": "no-cache"})
         resp.raise_for_status()
-        feed = feedparser.parse(resp.content)
+    except Exception as e:
+        raise RuntimeError(f"RSS požadavek selhal: {e}")
+
+    feed = feedparser.parse(resp.content)
 
     out: list[tuple[str, str, date, str]] = []
     for e in feed.entries:
