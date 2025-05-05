@@ -1,25 +1,16 @@
 """
-Streamlit aplikace pro výběr článků z blogu iDoklad (přes RSS feed) a vygenerování
-textu e‑mailu — **nyní strategicky skládá mix 4 článků** dle zadání marketingu:
+Streamlit aplikace pro strategický výběr 4 článků z iDoklad blogu.
 
-| Kategorie | Cíl |
-|-----------|-----|
-| **ENGAGEMENT** | Atraktivní téma s potenciálem vysoké návštěvnosti |
-| **CONVERSION** | Článek, který pravděpodobně navede ke koupi / upgradu |
-| **EDUCATIONAL** | Edukace, budování důvěry a know‑how |
-| **SEASONAL** | Reaguje na aktuální období (daně, začátky roku, atd.) |
+🛠 **Aktualizace:**
+1. **Tlačítko 🔄 Aktualizovat články** teď opravdu znovu zobrazí články, i kdyby se už
+   předtím načetly. Byla odstraněna server‑cache RSS (parametr `?t=<timestamp>` a
+   `Cache‑Control: no-cache`).
+2. Přibyl volitelný checkbox **„Zahrnout i dříve použité články“**.  
+   Pokud je zatržený, historie se při výběru ignoruje a zobrazí se i odkazy,
+   které už byly odeslány.
+3. Podpis v e‑mailu zůstává zkrácený na **„A“**.
 
-Aplikace se snaží vybrat **1 článek z každé kategorie**. Pokud pro některou není
-k dispozici vhodný kandidát, doplní se jiným dostupným (podle data).
-
-> ⚠️ Klasifikace je založená na jednoduchých klíčových slovech v titulku a
-> popisu RSS položky. Pokud se netrefí, klíčová slova lze kdykoli rozšířit v diktu
-> `CATEGORY_KEYWORDS`.
-
-`requirements.txt`:
-```
-feedparser>=6
-```
+`requirements.txt` nezměněno (`feedparser>=6`).
 """
 
 from __future__ import annotations
@@ -27,6 +18,7 @@ from __future__ import annotations
 import email.utils as eut
 import json
 import re
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Tuple, Dict
@@ -54,9 +46,9 @@ CZECH_MONTHS = [
 CATEGORY_ORDER = ["ENGAGEMENT", "CONVERSION", "EDUCATIONAL", "SEASONAL"]
 CATEGORY_KEYWORDS: Dict[str, list[str]] = {
     "ENGAGEMENT": ["tip", "trik", "příběh", "trend", "nej", "inspir"],
-    "CONVERSION": ["tarif", "funkc", "premium", "automat", "online platb", "API", "propojení"],
+    "CONVERSION": ["tarif", "funkc", "premium", "automat", "online platb", "api", "propojení"],
     "EDUCATIONAL": ["jak", "průvodce", "návod", "začínaj", "krok", "vysvětlen"],
-    "SEASONAL": ["daň", "DPH", "silvestr", "váno", "uzávěr", "přiznání", "leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"],
+    "SEASONAL": ["daň", "dph", "silvestr", "váno", "uzávěr", "přiznání", "leden", "únor", "březen", "duben", "květen", "červen", "červenec", "srpen", "září", "říjen", "listopad", "prosinec"],
 }
 
 ############################################################
@@ -66,21 +58,21 @@ CATEGORY_KEYWORDS: Dict[str, list[str]] = {
 def rerun() -> None:
     if hasattr(st, "rerun"):
         st.rerun()
-    elif hasattr(st, "experimental_rerun"):
+    else:
         st.experimental_rerun()
 
 
 def load_history() -> Dict[str, List[str]]:
     if HISTORY_FILE.exists():
         try:
-            return json.loads(HISTORY_FILE.read_text("utf‑8"))
+            return json.loads(HISTORY_FILE.read_text("utf-8"))
         except json.JSONDecodeError:
             pass
     return {}
 
 
 def save_history(data: dict) -> None:
-    HISTORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf‑8")
+    HISTORY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
 
 
 def clear_history() -> None:
@@ -98,31 +90,24 @@ def parse_date(raw: str | None):
 
 
 def fetch_blog_articles() -> List[Tuple[str, str, date, str]]:
-    """Načte RSS vždy čerstvě (obchází interní cache feedparseru).
-
-    Vrátí list (title, url, publish_date, summary).
-    """
-    # Vždy stáhneme XML ručně – tím se vyhneme 304/etag cache bugu,
-    # kvůli kterému po rychlém opětovném dotazu feedparser vrací prázdné `entries`.
-    try:
-        resp = requests.get(RSS_FEED_URL, timeout=10, headers={"Cache-Control": "no-cache"})
-        resp.raise_for_status()
-    except Exception as e:
-        raise RuntimeError(f"RSS požadavek selhal: {e}")
+    """Načte RSS bez serverové cache (přidá ?t=<timestamp>)."""
+    url = f"{RSS_FEED_URL}?t={int(time.time())}"
+    resp = requests.get(url, timeout=10, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
+    resp.raise_for_status()
 
     feed = feedparser.parse(resp.content)
 
     out: list[tuple[str, str, date, str]] = []
     for e in feed.entries:
-        title: str = e.get("title", "")
-        url: str | None = e.get("link")
-        if not url:
+        title = e.get("title", "")
+        link = e.get("link")
+        if not link:
             continue
         published = parse_date(e.get("published") or e.get("updated") or e.get("pubDate"))
         if not published:
             continue
-        summary: str = e.get("summary", "")
-        out.append((title, url, published, summary))
+        summary = e.get("summary", "")
+        out.append((title, link, published, summary))
     return out
 
 # ---------- Kategorizace ----------
@@ -133,15 +118,20 @@ def classify_article(title: str, summary: str) -> str | None:
         for kw in CATEGORY_KEYWORDS[cat]:
             if re.search(rf"{kw}", text):
                 return cat
-    return None  # nic nenašlo
+    return None
 
 # ---------- Výběr článků ----------
 
-def select_articles_for_month(articles: list[tuple[str, str, date, str]], history: dict, year: int, month: int):
+def select_articles_for_month(
+    articles: list[tuple[str, str, date, str]],
+    history: dict,
+    year: int,
+    month: int,
+    ignore_history: bool,
+):
     key = f"{year}-{month:02d}"
-    used_links = set(history.get(key, []))
+    used_links = set() if ignore_history else set(history.get(key, []))
 
-    # filtrovat na daný měsíc a nevyužité
     pool = [a for a in articles if a[2].year == year and a[2].month == month and a[1] not in used_links]
     pool.sort(key=lambda x: x[2], reverse=True)
 
@@ -155,7 +145,6 @@ def select_articles_for_month(articles: list[tuple[str, str, date, str]], histor
         else:
             others.append(art)
 
-    # poskládat finální seznam – nejprve kategorie ve správném pořadí, pak doplnit zbytky
     final: list[tuple[str, str, date, str]] = [a for a in (selected[c] for c in CATEGORY_ORDER) if a is not None]
     for art in others:
         if len(final) >= MAX_ARTICLES:
@@ -176,10 +165,10 @@ with st.sidebar:
     st.header("⚙️ Nastavení")
     if st.button("🗑️ Vymazat historii výběru"):
         clear_history()
-        st.success("Historie byla smazána.")
+        st.success("Historie smazána.")
         rerun()
 
-    with st.expander("📜 Historie vybraných článků", expanded=False):
+    with st.expander("📜 Historie vybraných článků", False):
         if not history:
             st.write("(prázdná)")
         else:
@@ -195,6 +184,8 @@ st.title("✉️ iDoklad Blog – strategický výběr 4 článků")
 if st.button("🔄 Aktualizovat články"):
     rerun()
 
+include_used = st.checkbox("Zahrnout i dříve použité články", value=False)
+
 with st.spinner("Načítám RSS feed …"):
     try:
         all_articles = fetch_blog_articles()
@@ -202,7 +193,6 @@ with st.spinner("Načítám RSS feed …"):
         st.error(f"Chyba při načítání RSS: {e}")
         st.stop()
 
-# poslední tři měsíce
 months = [(date.today().replace(day=15) - timedelta(days=30 * i)).replace(day=15) for i in range(MONTHS_TO_SHOW)]
 months_opts = [(dt.year, dt.month) for dt in months]
 sel_year, sel_month = st.selectbox(
@@ -212,17 +202,16 @@ sel_year, sel_month = st.selectbox(
     index=0,
 )
 
-selected_articles = select_articles_for_month(all_articles, history, sel_year, sel_month)
+selected_articles = select_articles_for_month(all_articles, history, sel_year, sel_month, include_used)
 
-# Výpis
 if not selected_articles:
-    st.warning("Pro daný měsíc nejsou dostupné nové články.")
+    st.warning("Pro daný měsíc nejsou dostupné články.")
 else:
     st.subheader("Vybraný mix článků")
     for art in selected_articles:
         title, url, pub_d, _ = art
-        cat = classify_article(title, "") or "OTHER"
-        st.markdown(f"- **[{title}]({url})**   *({cat.lower()}, {pub_d.strftime('%d.%m.%Y')})*")
+        cat = classify_article(title, "") or "other"
+        st.markdown(f"- **[{title}]({url})**   *({cat.lower()}, {pub_d:%d.%m.%Y})*")
 
     if st.button("✉️ Vygenerovat e‑mail", type="primary"):
         links = [url for _, url, _, _ in selected_articles]
@@ -230,14 +219,15 @@ else:
         body = (
             "Ahoj Martine,\n\n"
             "dal bys prosím dohromady statistiky za iDoklad a připravil mailing.\n\n"
-            "Články bych tam dala tyto (v pořadí ENGAGEMENT, CONVERSION, EDUCATIONAL, SEASONAL):\n" +
+            "Články bych tam dala tyto (ENGAGEMENT, CONVERSION, EDUCATIONAL, SEASONAL):\n" +
             "\n".join(links) + "\n\nS pozdravem\nA"
         )
 
-        key = f"{sel_year}-{sel_month:02d}"
-        history.setdefault(key, []).extend(links)
-        save_history(history)
+        if not include_used:
+            key = f"{sel_year}-{sel_month:02d}"
+            history.setdefault(key, []).extend(links)
+            save_history(history)
 
         st.success("E‑mail byl vygenerován!")
         st.code(subject)
-        st.text_area("Text e‑mailu", body, height=300)
+        st.text_area("Text e‑mailu", body, height=280)
