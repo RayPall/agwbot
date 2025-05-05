@@ -90,9 +90,15 @@ def parse_date(raw: str | None):
 
 
 def fetch_blog_articles() -> List[Tuple[str, str, date, str]]:
-    """Načte RSS bez serverové cache (přidá ?t=<timestamp>)."""
-    url = f"{RSS_FEED_URL}?t={int(time.time())}"
-    resp = requests.get(url, timeout=10, headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
+    """Načte RSS a **vždy obejde cache** – přidá náhodný query‑string.
+
+    Některé servery (rss.app) ignorují `Cache‑Control` i `?t=` s unixovým časem,
+    pokud přijde více požadavků ve stejné vteřině. Proto používáme `uuid4()`.
+    """
+    import uuid
+
+    url = f"{RSS_FEED_URL}?nocache={uuid.uuid4()}"
+    resp = requests.get(url, timeout=10)
     resp.raise_for_status()
 
     feed = feedparser.parse(resp.content)
